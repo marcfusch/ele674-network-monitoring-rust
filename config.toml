@@ -1,0 +1,15 @@
+[ping]
+interval_secs = 5
+timeout_ms = 1000
+targets = ["8.8.8.8:53", "1.1.1.1:443", "google.com:443"]
+
+[bandwidth]
+interval_secs = 60
+url = "https://speed.cloudflare.com/__down?bytes=10000000"
+
+[report]
+interval_secs = 300
+output_dir = "reports"
+
+[web]
+bind = "127.0.0.1:8080"

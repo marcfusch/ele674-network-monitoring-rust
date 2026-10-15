@@ -1,0 +1,19 @@
+[package]
+name = "network-monitor-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+serde_json = "1"
+ureq = {version = "3", default-features=false} #tls is fucking heavy
+tiny_http = "0.12"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
