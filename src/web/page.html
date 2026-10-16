@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Moniteur réseau</title>
+
+<h1>Moniteur réseau</h1>
+<pre id="status">chargement...</pre>
+
+<p>
+  <button onclick="post('/api/report')">Rapport maintenant</button>
+  <input id="targets" size="60" placeholder='["10.0.2.2:8000","1.1.1.1:443"]'>
+  <button onclick="post('/api/targets', byId('targets').value)">Changer les cibles</button>
+  <span id="message"></span>
+</p>
+
+<h3>Derniers rapports</h3>
+<ul id="reports"></ul>
+<pre id="report"></pre>
+
+<script>
+const byId = id => document.getElementById(id);
+const getJson = async url => (await fetch(url)).json();
+
+async function post(url, body) {
+  const r = await fetch(url, { method: 'POST', body });
+  byId('message').textContent = r.ok ? '✓ envoyé' : '✗ refusé (' + r.status + ')';
+  setTimeout(refresh, 500);
+}
+
+async function showReport(name) {
+  const report = await getJson('/api/reports/' + name);
+  byId('report').textContent = name + '\n' + JSON.stringify(report, null, 2);
+}
+
+function statusText(d) {
+  let text = '';
+  for (const [target, p] of Object.entries(d.pings)) {
+    const ms = p.last && p.last.value;
+    text += ms != null
+      ? `🟢 ${target} : ${ms.toFixed(1)} ms`
+      : `🔴 ${target} : injoignable`;
+    text += ` (perte ${p.stats.loss_percent.toFixed(0)} %)\n`;
+  }
+  const bw = d.bandwidth.last && d.bandwidth.last.value;
+  text += '\nDébit : ' + (bw != null ? bw.toFixed(1) + ' Mb/s' : 'n/a');
+  text += `\nUptime : ${d.uptime_s} s, rapports écrits : ${d.reports_written}`;
+  return text;
+}
+
+async function refresh() {
+  byId('status').textContent = statusText(await getJson('/api/status'));
+  const names = (await getJson('/api/reports')).slice(-5).reverse();
+  byId('reports').innerHTML = names
+    .map(n => `<li><a href="#" onclick="showReport('${n}')">${n}</a></li>`)
+    .join('');
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>

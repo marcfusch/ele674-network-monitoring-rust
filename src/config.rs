@@ -1,6 +1,4 @@
-//! Configuration (config.toml). Lecteur volontairement minimal : sections
-//! `[nom]`, puis `cle = valeur` avec des nombres, des "chaînes" ou des
-//! ["listes", "de chaînes"]. Commentaires avec #.
+//! Lecture de config.toml (sections, nombres, "chaînes", ["listes"]).
 
 use std::collections::HashMap;
 
@@ -8,15 +6,15 @@ use std::collections::HashMap;
 pub struct Config {
     pub ping_interval: u64, // s
     pub ping_timeout: u64,  // ms
-    pub targets: Vec<String>, // "hote:port"
+    pub targets: Vec<String>,
     pub bw_interval: u64,
     pub bw_timeout: u64,
-    pub bw_url: String, // http:// uniquement (pas de TLS sur la cible)
+    pub bw_url: String,
     pub report_interval: u64,
     pub report_dir: String,
     pub report_keep: usize,
     pub web_bind: String,
-    pub user: Option<String>, // utilisateur vers lequel abandonner les droits root
+    pub user: Option<String>,
     pub log_file: Option<String>,
     pub log_max_kb: u64,
 }
@@ -27,34 +25,43 @@ pub fn load(path: &str) -> Result<Config, String> {
 }
 
 pub fn parse(text: &str) -> Result<Config, String> {
-    // 1) "section.cle" -> valeur brute
-    let mut raw = HashMap::new();
+    let raw = read_keys(text)?;
+    let cfg = from_keys(&raw)?;
+    validate(&cfg)?;
+    Ok(cfg)
+}
+
+/// "section.cle" -> valeur brute
+fn read_keys(text: &str) -> Result<HashMap<String, String>, String> {
+    let mut keys = HashMap::new();
     let mut section = String::new();
     for (n, line) in text.lines().enumerate() {
         let line = strip_comment(line).trim();
         if line.is_empty() {
             continue;
         }
-        if line.starts_with('[') && line.ends_with(']') {
-            section = line[1..line.len() - 1].trim().to_string();
-        } else if let Some((k, v)) = line.split_once('=') {
-            raw.insert(format!("{section}.{}", k.trim()), v.trim().to_string());
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name.trim().to_string();
+        } else if let Some((key, value)) = line.split_once('=') {
+            keys.insert(format!("{section}.{}", key.trim()), value.trim().to_string());
         } else {
             return Err(format!("ligne {} : '=' attendu", n + 1));
         }
     }
+    Ok(keys)
+}
 
-    // 2) conversion, avec valeurs par défaut
-    let num = |k: &str, def: u64| match raw.get(k) {
+fn from_keys(keys: &HashMap<String, String>) -> Result<Config, String> {
+    let num = |k: &str, default: u64| match keys.get(k) {
         Some(v) => v.parse::<u64>().map_err(|_| format!("{k} : nombre attendu")),
-        None => Ok(def),
+        None => Ok(default),
     };
-    let text = |k: &str| raw.get(k).map(|v| v.trim_matches('"').to_string());
+    let text = |k: &str| keys.get(k).map(|v| v.trim_matches('"').to_string());
 
-    let cfg = Config {
+    Ok(Config {
         ping_interval: num("ping.interval_secs", 5)?,
         ping_timeout: num("ping.timeout_ms", 1000)?,
-        targets: raw.get("ping.targets").map(|v| parse_list(v)).unwrap_or_default(),
+        targets: keys.get("ping.targets").map(|v| parse_list(v)).unwrap_or_default(),
         bw_interval: num("bandwidth.interval_secs", 30)?,
         bw_timeout: num("bandwidth.timeout_ms", 10_000)?,
         bw_url: text("bandwidth.url").unwrap_or_default(),
@@ -65,8 +72,10 @@ pub fn parse(text: &str) -> Result<Config, String> {
         user: text("system.user"),
         log_file: text("system.log_file"),
         log_max_kb: num("system.log_max_kb", 64)?,
-    };
+    })
+}
 
+fn validate(cfg: &Config) -> Result<(), String> {
     if cfg.targets.is_empty() || !cfg.targets.iter().all(|t| valid_target(t)) {
         return Err("ping.targets : liste de \"hote:port\" attendue".into());
     }
@@ -76,38 +85,39 @@ pub fn parse(text: &str) -> Result<Config, String> {
     if cfg.ping_interval == 0 || cfg.bw_interval == 0 || cfg.report_interval == 0 {
         return Err("les intervalles doivent être >= 1".into());
     }
-    Ok(cfg)
+    Ok(())
 }
 
-/// Retire un commentaire `# ...` (sauf à l'intérieur d'une chaîne)
+/// "hote:port" avec un hôte non vide et un port entre 1 et 65535.
+pub fn valid_target(target: &str) -> bool {
+    match target.rsplit_once(':') {
+        Some((host, port)) => !host.is_empty() && port.parse::<u16>().is_ok_and(|p| p > 0),
+        None => false,
+    }
+}
+
+/// Retire un commentaire `#`, sauf à l'intérieur d'une chaîne.
 fn strip_comment(line: &str) -> &str {
-    let mut in_str = false;
+    let mut in_string = false;
     for (i, c) in line.char_indices() {
         match c {
-            '"' => in_str = !in_str,
-            '#' if !in_str => return &line[..i],
+            '"' => in_string = !in_string,
+            '#' if !in_string => return &line[..i],
             _ => {}
         }
     }
     line
 }
 
-/// `["a", "b"]` -> vec!["a", "b"]
-fn parse_list(v: &str) -> Vec<String> {
-    v.trim_start_matches('[')
+/// `["a", "b"]` -> ["a", "b"]
+fn parse_list(value: &str) -> Vec<String> {
+    value
+        .trim_start_matches('[')
         .trim_end_matches(']')
         .split(',')
         .map(|s| s.trim().trim_matches('"').to_string())
         .filter(|s| !s.is_empty())
         .collect()
-}
-
-/// "hote:port" : hôte non vide, port numérique
-pub fn valid_target(t: &str) -> bool {
-    match t.rsplit_once(':') {
-        Some((host, port)) => !host.is_empty() && port.parse::<u16>().map_or(false, |p| p > 0),
-        None => false,
-    }
 }
 
 #[cfg(test)]

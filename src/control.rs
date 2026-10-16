@@ -1,7 +1,5 @@
-//! Synchronisation entre threads : un Mutex protège les drapeaux de contrôle,
-//! un Condvar réveille les threads endormis (arrêt demandé ou rapport immédiat).
-//! Les threads n'utilisent jamais thread::sleep : leur attente est interruptible,
-//! donc un SIGTERM arrête l'application en quelques millisecondes.
+//! Arrêt et rapport immédiat : Mutex + Condvar.
+//! Les threads attendent sur la Condvar au lieu de dormir : un arrêt les réveille aussitôt.
 
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -26,12 +24,6 @@ pub enum Wake {
 }
 
 impl Control {
-    // Un thread qui panique en tenant le verrou "empoisonne" le Mutex :
-    // les drapeaux restent cohérents, on récupère donc la valeur au lieu de planter.
-    fn lock(&self) -> MutexGuard<'_, Flags> {
-        self.flags.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
     pub fn shutdown(&self) {
         self.lock().shutdown = true;
         self.cv.notify_all();
@@ -46,30 +38,34 @@ impl Control {
         self.cv.notify_all();
     }
 
-    /// Attend `timeout` ou un arrêt. Renvoie true si l'arrêt est demandé.
+    /// Attend `timeout` ; renvoie true si l'arrêt est demandé entre-temps.
     pub fn sleep(&self, timeout: Duration) -> bool {
         self.wait(timeout, false) == Wake::Shutdown
     }
 
-    /// Attend `timeout`, un arrêt, ou (si `report` vaut true) une demande de rapport.
+    /// Attend `timeout`, un arrêt, ou une demande de rapport si `report`.
     pub fn wait(&self, timeout: Duration, report: bool) -> Wake {
         let deadline = Instant::now() + timeout;
-        let mut f = self.lock();
+        let mut flags = self.lock();
         loop {
-            if f.shutdown {
+            if flags.shutdown {
                 return Wake::Shutdown;
             }
-            if report && f.report_now {
-                f.report_now = false;
+            if report && flags.report_now {
+                flags.report_now = false;
                 return Wake::Report;
             }
             let now = Instant::now();
             if now >= deadline {
                 return Wake::Timeout;
             }
-            // wait_timeout relâche le Mutex pendant l'attente (pas d'attente active)
-            f = self.cv.wait_timeout(f, deadline - now).unwrap_or_else(|e| e.into_inner()).0;
+            flags = self.cv.wait_timeout(flags, deadline - now).unwrap_or_else(|e| e.into_inner()).0;
         }
+    }
+
+    // Un Mutex "empoisonné" (panique d'un autre thread) reste utilisable
+    fn lock(&self) -> MutexGuard<'_, Flags> {
+        self.flags.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -81,23 +77,23 @@ mod tests {
 
     #[test]
     fn shutdown_wakes_sleeping_thread() {
-        let c = Arc::new(Control::default());
-        let c2 = c.clone();
-        let t = thread::spawn(move || {
+        let control = Arc::new(Control::default());
+        let c = control.clone();
+        let sleeper = thread::spawn(move || {
             let start = Instant::now();
-            assert!(c2.sleep(Duration::from_secs(30)));
+            assert!(c.sleep(Duration::from_secs(30)));
             start.elapsed()
         });
         thread::sleep(Duration::from_millis(50));
-        c.shutdown();
-        assert!(t.join().unwrap() < Duration::from_secs(1));
+        control.shutdown();
+        assert!(sleeper.join().unwrap() < Duration::from_secs(1));
     }
 
     #[test]
     fn report_request_is_consumed_once() {
-        let c = Control::default();
-        c.request_report();
-        assert_eq!(c.wait(Duration::from_millis(10), true), Wake::Report);
-        assert_eq!(c.wait(Duration::from_millis(10), true), Wake::Timeout);
+        let control = Control::default();
+        control.request_report();
+        assert_eq!(control.wait(Duration::from_millis(10), true), Wake::Report);
+        assert_eq!(control.wait(Duration::from_millis(10), true), Wake::Timeout);
     }
 }

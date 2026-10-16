@@ -1,16 +1,16 @@
 //! État partagé entre les threads.
 
 use crate::control::Control;
-use crate::log::{format_time, now};
+use crate::time;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::AtomicU64;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Instant;
 
-const HISTORY: usize = 100; // mesures conservées par cible
+const HISTORY: usize = 100;
 
-/// Une mesure : latence (ms) ou débit (Mb/s), None si échec
+/// Latence (ms) ou débit (Mb/s) ; None si la mesure a échoué.
 #[derive(Clone, Copy)]
 pub struct Sample {
     pub time: i64,
@@ -23,12 +23,10 @@ pub struct MonitorState {
     pub bandwidth: VecDeque<Sample>,
 }
 
-/// Tout ce que les threads partagent. RwLock pour les mesures : le serveur web
-/// lit souvent, les threads de mesure écrivent rarement (plusieurs lecteurs
-/// simultanés possibles). Rust refuse de compiler un accès sans verrou.
 pub struct App {
+    // RwLock : lectures fréquentes (web), écritures rares (mesures)
     pub state: RwLock<MonitorState>,
-    pub targets: RwLock<Vec<String>>, // modifiables à distance (POST /api/targets)
+    pub targets: RwLock<Vec<String>>,
     pub control: Control,
     pub started: Instant,
     pub reports_written: AtomicU64,
@@ -45,20 +43,21 @@ impl App {
         }
     }
 
-    // `unwrap_or_else(into_inner)` : si un thread a paniqué en tenant le
-    // verrou, les données restent utilisables au lieu de tout faire planter.
     pub fn read(&self) -> RwLockReadGuard<'_, MonitorState> {
         self.state.read().unwrap_or_else(|e| e.into_inner())
     }
+
     pub fn write(&self) -> RwLockWriteGuard<'_, MonitorState> {
         self.state.write().unwrap_or_else(|e| e.into_inner())
     }
+
     pub fn targets(&self) -> Vec<String> {
         self.targets.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
-    pub fn set_targets(&self, t: Vec<String>) {
-        self.write().pings.retain(|k, _| t.contains(k)); // oublie les cibles retirées
-        *self.targets.write().unwrap_or_else(|e| e.into_inner()) = t;
+
+    pub fn set_targets(&self, targets: Vec<String>) {
+        self.write().pings.retain(|t, _| targets.contains(t));
+        *self.targets.write().unwrap_or_else(|e| e.into_inner()) = targets;
     }
 }
 
@@ -78,7 +77,7 @@ impl MonitorState {
             .map(|(t, h)| (t.clone(), json!({ "last": last(h), "stats": stats(h) })))
             .collect();
         json!({
-            "time": format_time(now(), "%Y-%m-%dT%H:%M:%S"),
+            "time": time::iso(time::now()),
             "pings": pings,
             "bandwidth": { "last": last(&self.bandwidth), "stats": stats(&self.bandwidth) },
         })
@@ -89,18 +88,17 @@ fn push(history: &mut VecDeque<Sample>, value: Option<f64>) {
     if history.len() == HISTORY {
         history.pop_front();
     }
-    history.push_back(Sample { time: now(), value });
+    history.push_back(Sample { time: time::now(), value });
 }
 
 fn last(history: &VecDeque<Sample>) -> Value {
     match history.back() {
-        Some(s) => json!({ "time": format_time(s.time, "%Y-%m-%dT%H:%M:%S"), "value": s.value }),
+        Some(s) => json!({ "time": time::iso(s.time), "value": s.value }),
         None => Value::Null,
     }
 }
 
-/// Nombre de mesures, % de pertes, min / max / moyenne des mesures réussies
-pub fn stats(history: &VecDeque<Sample>) -> Value {
+fn stats(history: &VecDeque<Sample>) -> Value {
     let ok: Vec<f64> = history.iter().filter_map(|s| s.value).collect();
     let count = history.len();
     let loss = if count == 0 { 0.0 } else { (count - ok.len()) as f64 * 100.0 / count as f64 };
@@ -124,7 +122,8 @@ mod tests {
             s.record_ping("a", v);
         }
         let st = stats(&s.pings["a"]);
-        assert_eq!((st["count"].as_u64(), st["loss_percent"].as_f64()), (Some(4), Some(25.0)));
+        assert_eq!(st["count"], 4);
+        assert_eq!(st["loss_percent"], 25.0);
         assert_eq!((st["min"].as_f64(), st["max"].as_f64(), st["avg"].as_f64()), (Some(10.0), Some(30.0), Some(20.0)));
     }
 
