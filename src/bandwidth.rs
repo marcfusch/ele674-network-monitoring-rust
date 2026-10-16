@@ -38,7 +38,9 @@ pub fn measure(url: &str, timeout: Duration) -> Result<f64, String> {
     let start = Instant::now();
     let mut s = TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("connexion : {e}"))?;
     s.set_read_timeout(Some(timeout)).ok();
-    write!(s, "GET {path} HTTP/1.0\r\nHost: {host}\r\n\r\n").map_err(|e| e.to_string())?;
+    // Requête envoyée en un seul bloc (write! ferait plusieurs petits envois)
+    let request = format!("GET {path} HTTP/1.0\r\nHost: {host}\r\n\r\n");
+    s.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
 
     let mut data = Vec::new();
     s.read_to_end(&mut data).map_err(|e| format!("lecture : {e}"))?;
@@ -65,7 +67,15 @@ mod tests {
         let addr = l.local_addr().unwrap();
         std::thread::spawn(move || {
             let (mut c, _) = l.accept().unwrap();
-            let _ = c.read(&mut [0u8; 512]);
+            // Lit toute la requête (jusqu'à la ligne vide) avant de répondre
+            let mut req = Vec::new();
+            while !req.ends_with(b"\r\n\r\n") {
+                let mut b = [0u8; 1];
+                if c.read(&mut b).unwrap() == 0 {
+                    break;
+                }
+                req.push(b[0]);
+            }
             c.write_all(b"HTTP/1.0 200 OK\r\n\r\n").unwrap();
             c.write_all(&vec![0u8; 1 << 20]).unwrap();
         });

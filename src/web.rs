@@ -17,10 +17,13 @@ use std::time::Duration;
 
 const PAGE: &str = r#"<!doctype html><meta charset="utf-8"><title>Moniteur réseau</title>
 <h1>Moniteur réseau</h1><pre id="s">chargement...</pre>
-<p><button onclick="fetch('/api/report',{method:'POST'})">Rapport maintenant</button>
+<p><button onclick="send('/api/report')">Rapport maintenant</button>
 <input id="t" size="60" placeholder='["10.0.2.2:8000","1.1.1.1:443"]'>
-<button onclick="fetch('/api/targets',{method:'POST',body:document.getElementById('t').value})">Changer les cibles</button></p>
+<button onclick="send('/api/targets',document.getElementById('t').value)">Changer les cibles</button>
+<span id="m"></span></p>
 <script>
+async function send(url,body){const r=await fetch(url,{method:'POST',body});
+document.getElementById('m').textContent=r.ok?'✓ envoyé':'✗ refusé ('+r.status+')';f();}
 async function f(){const d=await (await fetch('/api/status')).json();let t='';
 for(const[k,v]of Object.entries(d.pings)){const l=v.last&&v.last.value;
 t+=(l!=null?'🟢 ':'🔴 ')+k+' : '+(l!=null?l.toFixed(1)+' ms':'injoignable')+' (perte '+v.stats.loss_percent.toFixed(0)+' %)\n';}
@@ -44,17 +47,22 @@ pub fn run(app: &App, cfg: &Config) {
     // Non bloquant : on revérifie régulièrement si l'arrêt est demandé
     listener.set_nonblocking(true).ok();
     info!("interface web : http://{}", cfg.web_bind);
-    while !app.control.is_shutdown() {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let _ = handle(app, cfg, stream); // un client défaillant n'arrête pas le serveur
+    // Une connexion = un thread de courte durée. Sinon, une connexion ouverte
+    // à l'avance par le navigateur (sans requête) bloquerait les suivantes.
+    // Le scope attend la fin de ces threads avant l'arrêt.
+    std::thread::scope(|s| {
+        while !app.control.is_shutdown() {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    s.spawn(move || handle(app, cfg, stream)); // erreur client ignorée
+                }
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    app.control.sleep(Duration::from_millis(100));
+                }
+                Err(e) => error!("serveur web : {e}"),
             }
-            Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                app.control.sleep(Duration::from_millis(100));
-            }
-            Err(e) => error!("serveur web : {e}"),
         }
-    }
+    });
 }
 
 fn handle(app: &App, cfg: &Config, stream: TcpStream) -> std::io::Result<()> {
