@@ -1,37 +1,150 @@
-use serde::Deserialize;
+//! Configuration (config.toml). Lecteur volontairement minimal : sections
+//! `[nom]`, puis `cle = valeur` avec des nombres, des "chaînes" ou des
+//! ["listes", "de chaînes"]. Commentaires avec #.
 
-#[derive(Debug, Clone, Deserialize)]
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
 pub struct Config {
-    pub ping: PingConfig,
-    pub bandwidth: BandwidthConfig,
-    pub report: ReportConfig,
-    pub web: WebConfig,
+    pub ping_interval: u64, // s
+    pub ping_timeout: u64,  // ms
+    pub targets: Vec<String>, // "hote:port"
+    pub bw_interval: u64,
+    pub bw_timeout: u64,
+    pub bw_url: String, // http:// uniquement (pas de TLS sur la cible)
+    pub report_interval: u64,
+    pub report_dir: String,
+    pub report_keep: usize,
+    pub web_bind: String,
+    pub user: Option<String>, // utilisateur vers lequel abandonner les droits root
+    pub log_file: Option<String>,
+    pub log_max_kb: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct PingConfig {
-    pub interval_secs: u64,
-    pub timeout_ms: u64,
-    pub targets: Vec<String>, // format "hote:port"
+pub fn load(path: &str) -> Result<Config, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    parse(&text)
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct BandwidthConfig {
-    pub interval_secs: u64,
-    pub url: String,
+pub fn parse(text: &str) -> Result<Config, String> {
+    // 1) "section.cle" -> valeur brute
+    let mut raw = HashMap::new();
+    let mut section = String::new();
+    for (n, line) in text.lines().enumerate() {
+        let line = strip_comment(line).trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            section = line[1..line.len() - 1].trim().to_string();
+        } else if let Some((k, v)) = line.split_once('=') {
+            raw.insert(format!("{section}.{}", k.trim()), v.trim().to_string());
+        } else {
+            return Err(format!("ligne {} : '=' attendu", n + 1));
+        }
+    }
+
+    // 2) conversion, avec valeurs par défaut
+    let num = |k: &str, def: u64| match raw.get(k) {
+        Some(v) => v.parse::<u64>().map_err(|_| format!("{k} : nombre attendu")),
+        None => Ok(def),
+    };
+    let text = |k: &str| raw.get(k).map(|v| v.trim_matches('"').to_string());
+
+    let cfg = Config {
+        ping_interval: num("ping.interval_secs", 5)?,
+        ping_timeout: num("ping.timeout_ms", 1000)?,
+        targets: raw.get("ping.targets").map(|v| parse_list(v)).unwrap_or_default(),
+        bw_interval: num("bandwidth.interval_secs", 30)?,
+        bw_timeout: num("bandwidth.timeout_ms", 10_000)?,
+        bw_url: text("bandwidth.url").unwrap_or_default(),
+        report_interval: num("report.interval_secs", 60)?,
+        report_dir: text("report.output_dir").unwrap_or_else(|| "reports".into()),
+        report_keep: num("report.keep", 20)? as usize,
+        web_bind: text("web.bind").unwrap_or_else(|| "127.0.0.1:8080".into()),
+        user: text("system.user"),
+        log_file: text("system.log_file"),
+        log_max_kb: num("system.log_max_kb", 64)?,
+    };
+
+    if cfg.targets.is_empty() || !cfg.targets.iter().all(|t| valid_target(t)) {
+        return Err("ping.targets : liste de \"hote:port\" attendue".into());
+    }
+    if !cfg.bw_url.starts_with("http://") {
+        return Err("bandwidth.url : http:// requis".into());
+    }
+    if cfg.ping_interval == 0 || cfg.bw_interval == 0 || cfg.report_interval == 0 {
+        return Err("les intervalles doivent être >= 1".into());
+    }
+    Ok(cfg)
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct ReportConfig {
-    pub interval_secs: u64,
-    pub output_dir: String,
+/// Retire un commentaire `# ...` (sauf à l'intérieur d'une chaîne)
+fn strip_comment(line: &str) -> &str {
+    let mut in_str = false;
+    for (i, c) in line.char_indices() {
+        match c {
+            '"' => in_str = !in_str,
+            '#' if !in_str => return &line[..i],
+            _ => {}
+        }
+    }
+    line
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct WebConfig {
-    pub bind: String,
+/// `["a", "b"]` -> vec!["a", "b"]
+fn parse_list(v: &str) -> Vec<String> {
+    v.trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
-pub fn load(path: &str) -> Result<Config, Box<dyn std::error::Error>> {
-    Ok(toml::from_str(&std::fs::read_to_string(path)?)?)
+/// "hote:port" : hôte non vide, port numérique
+pub fn valid_target(t: &str) -> bool {
+    match t.rsplit_once(':') {
+        Some((host, port)) => !host.is_empty() && port.parse::<u16>().map_or(false, |p| p > 0),
+        None => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_config() {
+        let c = parse(
+            "[ping] # commentaire\ninterval_secs = 2\ntargets = [\"a:1\", \"b:2\"]\n\
+             [bandwidth]\nurl = \"http://h:8000/x\"\n[system]\nuser = \"netmon\"\n",
+        )
+        .unwrap();
+        assert_eq!((c.ping_interval, c.ping_timeout), (2, 1000));
+        assert_eq!(c.targets, ["a:1", "b:2"]);
+        assert_eq!(c.user.as_deref(), Some("netmon"));
+        assert_eq!(c.report_keep, 20);
+    }
+
+    #[test]
+    fn rejects_bad_config() {
+        assert!(parse("[ping]\ntargets = [\"sans-port\"]\n[bandwidth]\nurl = \"http://h/\"").is_err());
+        assert!(parse("[ping]\ntargets = [\"a:1\"]\n[bandwidth]\nurl = \"https://h/\"").is_err());
+        assert!(parse("[ping]\ninterval_secs = abc").is_err());
+    }
+
+    #[test]
+    fn repo_config_is_valid() {
+        load(concat!(env!("CARGO_MANIFEST_DIR"), "/config.toml")).unwrap();
+    }
+
+    #[test]
+    fn target_validation() {
+        assert!(valid_target("10.0.2.2:8000"));
+        assert!(!valid_target("10.0.2.2"));
+        assert!(!valid_target(":80"));
+        assert!(!valid_target("h:0"));
+        assert!(!valid_target("h:99999"));
+    }
 }

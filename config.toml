@@ -1,15 +1,24 @@
+# Configuration de développement (exécution native sur le PC : cargo run -- -c config.toml)
+# La configuration de la cible est dans le package BuildRoot (package/netmon/config.toml).
+
 [ping]
 interval_secs = 5
 timeout_ms = 1000
-targets = ["8.8.8.8:53", "1.1.1.1:443", "google.com:443"]
+targets = ["127.0.0.1:8000", "1.1.1.1:443", "192.0.2.1:80"]
 
 [bandwidth]
-interval_secs = 60
-url = "https://speed.cloudflare.com/__down?bytes=10000000"
+interval_secs = 30
+url = "http://127.0.0.1:8000/blob.bin"
+timeout_ms = 10000
 
 [report]
-interval_secs = 300
+interval_secs = 60
 output_dir = "reports"
+keep = 20
 
 [web]
 bind = "127.0.0.1:8080"
+
+[system]
+log_file = "netmon.log"
+log_max_kb = 64

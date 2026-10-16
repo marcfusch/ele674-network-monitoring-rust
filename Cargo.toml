@@ -1,19 +1,26 @@
 [package]
 name = "network-monitor-app"
-version = "0.1.0"
-edition = "2024"
+version = "0.3.0"
+edition = "2021"
+# Version de Rust fournie par BuildRoot 2024.02 (host-rust-bin)
+rust-version = "1.74"
 
+[[bin]]
+name = "netmon"
+path = "src/main.rs"
+
+# Deux dépendances seulement : JSON et appels système (signaux, droits, dates)
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-chrono = { version = "0.4", features = ["serde"] }
 serde_json = "1"
-ureq = {version = "3", default-features=false} #tls is fucking heavy
-tiny_http = "0.12"
+libc = "0.2"
 
 [profile.release]
-opt-level = "z"
-lto = true
+opt-level = "z"     # optimise pour la taille
+lto = true          # optimisation à l'édition des liens (retire le code inutilisé)
 codegen-units = 1
-panic = "abort"
+panic = "abort"     # pas de code de déroulement de pile
 strip = true
+
+# Profil debug utilisable sur la cible (symboles conservés, pour gdbserver)
+[profile.dev]
+opt-level = 1
