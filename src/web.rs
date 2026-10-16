@@ -1,11 +1,12 @@
 //! Interface web + API de contrôle à distance. Serveur HTTP/1.0 minimal écrit
-//! avec la bibliothèque standard (une requête à la fois, suffisant ici) :
-//!   GET  /              page de statut (rafraîchie toutes les 2 s)
-//!   GET  /api/status    état complet en JSON
-//!   GET  /api/health    santé du service (uid, uptime, rapports)
-//!   GET  /api/reports   liste des rapports sur disque
-//!   POST /api/report    demande un rapport immédiat
-//!   POST /api/targets   remplace les cibles surveillées (tableau JSON)
+//! avec la bibliothèque standard (un thread par connexion) :
+//!   GET  /                    page de statut (rafraîchie toutes les 2 s)
+//!   GET  /api/status          état complet en JSON
+//!   GET  /api/health          santé du service (uid, uptime, rapports)
+//!   GET  /api/reports         liste des rapports sur disque
+//!   GET  /api/reports/<nom>   contenu d'un rapport
+//!   POST /api/report          demande un rapport immédiat
+//!   POST /api/targets         remplace les cibles surveillées (tableau JSON)
 
 use crate::{config::valid_target, config::Config, error, info, report, state::App};
 use serde_json::json;
@@ -15,23 +16,28 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-const PAGE: &str = r#"<!doctype html><meta charset="utf-8"><title>Moniteur réseau</title>
+const PAGE: &str = r##"<!doctype html><meta charset="utf-8"><title>Moniteur réseau</title>
 <h1>Moniteur réseau</h1><pre id="s">chargement...</pre>
 <p><button onclick="send('/api/report')">Rapport maintenant</button>
 <input id="t" size="60" placeholder='["10.0.2.2:8000","1.1.1.1:443"]'>
 <button onclick="send('/api/targets',document.getElementById('t').value)">Changer les cibles</button>
 <span id="m"></span></p>
+<h3>Derniers rapports (cliquer pour afficher)</h3><ul id="r"></ul><pre id="v"></pre>
 <script>
 async function send(url,body){const r=await fetch(url,{method:'POST',body});
-document.getElementById('m').textContent=r.ok?'✓ envoyé':'✗ refusé ('+r.status+')';f();}
-async function f(){const d=await (await fetch('/api/status')).json();let t='';
+document.getElementById('m').textContent=r.ok?'✓ envoyé':'✗ refusé ('+r.status+')';setTimeout(f,500);}
+async function show(n){const r=await (await fetch('/api/reports/'+n)).json();
+document.getElementById('v').textContent=n+'\n'+JSON.stringify(r,null,2);}
+async function f(){const rep=await (await fetch('/api/reports')).json();
+document.getElementById('r').innerHTML=rep.slice(-5).reverse().map(n=>`<li><a href="#" onclick="show('${n}')">${n}</a></li>`).join('');
+const d=await (await fetch('/api/status')).json();let t='';
 for(const[k,v]of Object.entries(d.pings)){const l=v.last&&v.last.value;
 t+=(l!=null?'🟢 ':'🔴 ')+k+' : '+(l!=null?l.toFixed(1)+' ms':'injoignable')+' (perte '+v.stats.loss_percent.toFixed(0)+' %)\n';}
 const b=d.bandwidth.last&&d.bandwidth.last.value;t+='\nDébit : '+(b!=null?b.toFixed(1)+' Mb/s':'n/a');
 t+='\nUptime : '+d.uptime_s+' s, rapports écrits : '+d.reports_written;
 document.getElementById('s').textContent=t;}
 f();setInterval(f,2000);
-</script>"#;
+</script>"##;
 
 pub fn run(app: &App, cfg: &Config) {
     // Port occupé : on réessaie au lieu de faire planter toute l'application
@@ -119,6 +125,16 @@ fn route(app: &App, cfg: &Config, method: &str, path: &str, body: &str) -> (u16,
             let mut r = report::list(Path::new(&cfg.report_dir)).unwrap_or_default();
             r.sort();
             (200, JSON, json!(r).to_string())
+        }
+        ("GET", p) if p.starts_with("/api/reports/") => {
+            // Nom contrôlé : uniquement un fichier report_*.json du dossier
+            // (pas de "/" ni de "..", donc pas d'accès au reste du disque)
+            let name = &p["/api/reports/".len()..];
+            let ok = name.starts_with("report_") && name.ends_with(".json") && !name.contains(['/', '\\']);
+            match ok.then(|| std::fs::read_to_string(Path::new(&cfg.report_dir).join(name))) {
+                Some(Ok(content)) => (200, JSON, content),
+                _ => (404, JSON, r#"{"error":"rapport introuvable"}"#.into()),
+            }
         }
         ("POST", "/api/report") => {
             app.control.request_report();
