@@ -6,10 +6,16 @@
 <pre id="status">chargement...</pre>
 
 <p>
-  <button onclick="post('/api/report')">Rapport maintenant</button>
-  <input id="targets" size="60" placeholder='["10.0.2.2:8000","1.1.1.1:443"]'>
-  <button onclick="post('/api/targets', byId('targets').value)">Changer les cibles</button>
+  <button onclick="post('/api/report')">Créer un rapport instantané</button>
   <span id="message"></span>
+</p>
+
+<h3>Cibles surveillées</h3>
+<p>Remplace la liste des adresses testées (format <code>"adresse:port"</code>) :</p>
+<p>
+  <input id="targets" size="60" placeholder='["10.0.2.2:8000", "1.1.1.1:443"]'>
+  <button onclick="post('/api/targets', byId('targets').value, 'targets-message')">Modifier les cibles surveillées</button>
+  <span id="targets-message"></span>
 </p>
 
 <h3>Derniers rapports</h3>
@@ -20,9 +26,9 @@
 const byId = id => document.getElementById(id);
 const getJson = async url => (await fetch(url)).json();
 
-async function post(url, body) {
+async function post(url, body, messageId = 'message') {
   const r = await fetch(url, { method: 'POST', body });
-  byId('message').textContent = r.ok ? '✓ envoyé' : '✗ refusé (' + r.status + ')';
+  byId(messageId).textContent = r.ok ? '✓ envoyé' : '✗ refusé (' + r.status + ')';
   setTimeout(refresh, 500);
 }
 
