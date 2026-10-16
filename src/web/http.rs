@@ -72,3 +72,44 @@ pub fn write_response(mut stream: &TcpStream, r: &Response) -> io::Result<()> {
     stream.write_all(head.as_bytes())?;
     stream.write_all(r.body.as_bytes())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    /// Envoie `raw` au serveur de test et renvoie la requête lue.
+    fn parse(raw: &'static [u8]) -> Request {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || TcpStream::connect(addr).unwrap().write_all(raw).unwrap());
+        let (stream, _) = listener.accept().unwrap();
+        read_request(&stream).unwrap()
+    }
+
+    #[test]
+    fn reads_method_path_and_body() {
+        let req = parse(b"POST /api/targets/add?x=1 HTTP/1.1\r\nHost: h\r\nContent-Length: 9\r\n\r\n1.1.1.1:1");
+        assert_eq!((req.method.as_str(), req.path.as_str()), ("POST", "/api/targets/add"));
+        assert_eq!(req.body, "1.1.1.1:1");
+    }
+
+    #[test]
+    fn get_without_body() {
+        let req = parse(b"GET / HTTP/1.1\r\nHost: h\r\n\r\n");
+        assert_eq!((req.method.as_str(), req.path.as_str(), req.body.as_str()), ("GET", "/", ""));
+    }
+
+    #[test]
+    fn writes_status_line_and_length() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        write_response(&server, &Response::json(404, "{}")).unwrap();
+        drop(server);
+        let mut out = String::new();
+        (&client).read_to_string(&mut out).unwrap();
+        assert!(out.starts_with("HTTP/1.0 404 Not Found\r\n"));
+        assert!(out.contains("Content-Length: 2\r\n") && out.ends_with("\r\n\r\n{}"));
+    }
+}

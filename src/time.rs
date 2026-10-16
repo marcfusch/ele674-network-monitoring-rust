@@ -24,3 +24,14 @@ pub fn format(t: i64, fmt: &str) -> String {
 pub fn iso(t: i64) -> String {
     format(t, "%Y-%m-%dT%H:%M:%S")
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn formats_dates() {
+        let one_year = 365 * 86_400 + 43_200; // 1er janvier 1971, midi UTC
+        assert_eq!(super::format(one_year, "%Y-%m-%d"), "1971-01-01");
+        assert_eq!(super::iso(one_year).len(), "1971-01-01T12:00:00".len());
+        assert!(super::now() > one_year);
+    }
+}

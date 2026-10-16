@@ -46,3 +46,20 @@ macro_rules! info { ($($a:tt)*) => { $crate::log::write("INFO", format_args!($($
 macro_rules! warn { ($($a:tt)*) => { $crate::log::write("WARN", format_args!($($a)*)) } }
 #[macro_export]
 macro_rules! error { ($($a:tt)*) => { $crate::log::write("ERROR", format_args!($($a)*)) } }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn rotates_when_too_big() {
+        let path = std::env::temp_dir().join(format!("netmon-log-{}", std::process::id()));
+        let path = path.to_str().unwrap();
+        super::init(path, 1).unwrap(); // 1 Ko maximum
+        for i in 0..40 {
+            crate::info!("ligne de test {i} pour remplir le journal");
+        }
+        let rotated = format!("{path}.1");
+        assert!(std::fs::metadata(&rotated).is_ok());
+        assert!(std::fs::metadata(path).unwrap().len() <= 1024);
+        let _ = (std::fs::remove_file(path), std::fs::remove_file(rotated));
+    }
+}

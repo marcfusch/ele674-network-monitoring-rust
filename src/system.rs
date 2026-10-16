@@ -95,3 +95,12 @@ fn is_running(pid: i32) -> bool {
     let state = stat.rsplit(") ").next().unwrap_or_default();
     !stat.is_empty() && !state.starts_with('Z')
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn detects_running_process() {
+        assert!(super::is_running(std::process::id() as i32));
+        assert!(!super::is_running(i32::MAX));
+    }
+}
