@@ -59,6 +59,29 @@ impl App {
         self.write().pings.retain(|t, _| targets.contains(t));
         *self.targets.write().unwrap_or_else(|e| e.into_inner()) = targets;
     }
+
+    /// Ajoute en tête de liste ; false si la cible est déjà surveillée.
+    pub fn add_target(&self, target: &str) -> bool {
+        let mut targets = self.targets.write().unwrap_or_else(|e| e.into_inner());
+        if targets.iter().any(|t| t == target) {
+            return false;
+        }
+        targets.insert(0, target.to_string());
+        true
+    }
+
+    /// Retire la cible et son historique ; false si elle n'existait pas.
+    pub fn remove_target(&self, target: &str) -> bool {
+        // Un seul verrou à la fois : pas d'interblocage avec set_targets
+        let removed = {
+            let mut targets = self.targets.write().unwrap_or_else(|e| e.into_inner());
+            let before = targets.len();
+            targets.retain(|t| t != target);
+            targets.len() < before
+        };
+        self.write().pings.remove(target);
+        removed
+    }
 }
 
 impl MonitorState {
@@ -134,6 +157,24 @@ mod tests {
             s.record_bandwidth(Some(1.0));
         }
         assert_eq!(s.bandwidth.len(), HISTORY);
+    }
+
+    #[test]
+    fn added_target_goes_first_without_duplicates() {
+        let app = App::new(vec!["a:1".into()]);
+        assert!(app.add_target("b:2"));
+        assert!(!app.add_target("a:1"));
+        assert_eq!(app.targets(), ["b:2", "a:1"]);
+    }
+
+    #[test]
+    fn remove_target_forgets_its_history() {
+        let app = App::new(vec!["a:1".into(), "b:2".into()]);
+        app.write().record_ping("a:1", Some(1.0));
+        assert!(app.remove_target("a:1"));
+        assert!(!app.remove_target("a:1"));
+        assert_eq!(app.targets(), ["b:2"]);
+        assert!(!app.read().pings.contains_key("a:1"));
     }
 
     #[test]

@@ -1,59 +1,96 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>Moniteur réseau</title>
+<style>
+  body { font-family: sans-serif; max-width: 800px; margin: 1em auto; padding: 0 1em; }
+  td { padding: 4px 12px 4px 0; }
+  pre { background: #f4f4f4; padding: .5em; }
+</style>
 
 <h1>Moniteur réseau</h1>
-<pre id="status">chargement...</pre>
-
-<p>
-  <button onclick="post('/api/report')">Créer un rapport instantané</button>
-  <span id="message"></span>
-</p>
 
 <h3>Cibles surveillées</h3>
-<p>Adresses à tester, séparées par des virgules (ex. <code>10.0.2.2:8000, 1.1.1.1:443</code>) :</p>
 <p>
-  <input id="targets" size="60" placeholder="10.0.2.2:8000">
-  <button onclick="post('/api/targets', byId('targets').value, 'targets-message')">Modifier les cibles surveillées</button>
-  <span id="targets-message"></span>
+  <input id="new-target" size="30" placeholder="10.0.2.2:8000"
+         onkeydown="if (event.key === 'Enter') addTarget()">
+  <button onclick="addTarget()">Ajouter la cible</button>
+  <span id="target-message"></span>
 </p>
+<table id="targets"></table>
+<p id="summary"></p>
 
 <h3>Derniers rapports</h3>
 <ul id="reports"></ul>
-<pre id="report"></pre>
+<pre id="report" hidden></pre>
+
+<p>
+  <button onclick="dumpNow()">Dump info now!</button>
+  <span id="dump-message"></span>
+</p>
 
 <script>
 const byId = id => document.getElementById(id);
 const getJson = async url => (await fetch(url)).json();
 
-async function post(url, body, messageId = 'message') {
+async function post(url, body) {
   const r = await fetch(url, { method: 'POST', body });
-  byId(messageId).textContent = r.ok ? '✓ envoyé' : '✗ refusé (' + r.status + ')';
+  const data = await r.json().catch(() => ({}));
+  return { ok: r.ok, error: data.error || r.status };
+}
+
+async function addTarget() {
+  const input = byId('new-target');
+  const r = await post('/api/targets/add', input.value.trim());
+  byId('target-message').textContent = r.ok ? '✓ ajoutée' : '✗ ' + r.error;
+  if (r.ok) input.value = '';
+  refresh();
+}
+
+async function removeTarget(target) {
+  await post('/api/targets/remove', target);
+  refresh();
+}
+
+async function dumpNow() {
+  const r = await post('/api/report');
+  byId('dump-message').textContent = r.ok ? '✓ rapport créé' : '✗ ' + r.error;
   setTimeout(refresh, 500);
 }
 
 async function showReport(name) {
   const report = await getJson('/api/reports/' + name);
+  byId('report').hidden = false;
   byId('report').textContent = name + '\n' + JSON.stringify(report, null, 2);
 }
 
-function statusText(d) {
-  let text = '';
-  for (const [target, p] of Object.entries(d.pings)) {
-    const ms = p.last && p.last.value;
-    text += ms != null
-      ? `🟢 ${target} : ${ms.toFixed(1)} ms`
-      : `🔴 ${target} : injoignable`;
-    text += ` (perte ${p.stats.loss_percent.toFixed(0)} %)\n`;
+function targetRow(target, ping) {
+  const value = ping && ping.last && ping.last.value;
+  const cells = !ping
+    ? ['⏳', target, 'première mesure en cours', '']
+    : value != null
+      ? ['🟢', target, value.toFixed(1) + ' ms', `perte ${ping.stats.loss_percent.toFixed(0)} %`]
+      : ['🔴', target, 'injoignable', `perte ${ping.stats.loss_percent.toFixed(0)} %`];
+
+  const row = document.createElement('tr');
+  for (const text of cells) {
+    row.insertCell().textContent = text;
   }
-  const bw = d.bandwidth.last && d.bandwidth.last.value;
-  text += '\nDébit : ' + (bw != null ? bw.toFixed(1) + ' Mb/s' : 'n/a');
-  text += `\nUptime : ${d.uptime_s} s, rapports écrits : ${d.reports_written}`;
-  return text;
+  const remove = document.createElement('button');
+  remove.textContent = 'Supprimer';
+  remove.onclick = () => removeTarget(target);
+  row.insertCell().append(remove);
+  return row;
 }
 
 async function refresh() {
-  byId('status').textContent = statusText(await getJson('/api/status'));
+  const d = await getJson('/api/status');
+  byId('targets').replaceChildren(...d.targets.map(t => targetRow(t, d.pings[t])));
+
+  const bw = d.bandwidth.last && d.bandwidth.last.value;
+  byId('summary').textContent =
+    'Débit : ' + (bw != null ? bw.toFixed(1) + ' Mb/s' : 'mesure en cours') +
+    ` — uptime : ${d.uptime_s} s — rapports écrits : ${d.reports_written}`;
+
   const names = (await getJson('/api/reports')).slice(-5).reverse();
   byId('reports').innerHTML = names
     .map(n => `<li><a href="#" onclick="showReport('${n}')">${n}</a></li>`)

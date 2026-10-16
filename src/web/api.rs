@@ -24,6 +24,8 @@ pub fn route(app: &App, cfg: &Config, req: &Request) -> Response {
             Response::json(202, r#"{"ok":true}"#)
         }
         ("POST", "/api/targets") => set_targets(app, &req.body),
+        ("POST", "/api/targets/add") => add_target(app, req.body.trim()),
+        ("POST", "/api/targets/remove") => remove_target(app, req.body.trim()),
         _ => Response::json(404, r#"{"error":"introuvable"}"#),
     }
 }
@@ -71,6 +73,25 @@ fn set_targets(app: &App, body: &str) -> Response {
         }
         None => Response::json(400, r#"{"error":"adresses attendues, ex. 10.0.2.2:8000, 1.1.1.1:443"}"#),
     }
+}
+
+fn add_target(app: &App, target: &str) -> Response {
+    if !valid_target(target) {
+        return Response::json(400, r#"{"error":"format attendu : adresse:port"}"#);
+    }
+    if !app.add_target(target) {
+        return Response::json(400, r#"{"error":"cible déjà surveillée"}"#);
+    }
+    info!("cible ajoutée : {target}");
+    Response::json(200, json!({ "targets": app.targets() }).to_string())
+}
+
+fn remove_target(app: &App, target: &str) -> Response {
+    if !app.remove_target(target) {
+        return Response::json(404, r#"{"error":"cible inconnue"}"#);
+    }
+    info!("cible supprimée : {target}");
+    Response::json(200, json!({ "targets": app.targets() }).to_string())
 }
 
 /// "a:1, b:2" ou "a:1 b:2" ou ["a:1", "b:2"] ; None si vide ou invalide.
