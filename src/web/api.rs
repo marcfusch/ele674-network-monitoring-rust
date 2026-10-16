@@ -63,12 +63,43 @@ fn report_file(cfg: &Config, name: &str) -> Response {
 }
 
 fn set_targets(app: &App, body: &str) -> Response {
-    match serde_json::from_str::<Vec<String>>(body) {
-        Ok(targets) if !targets.is_empty() && targets.iter().all(|t| valid_target(t)) => {
+    match parse_targets(body) {
+        Some(targets) => {
             info!("cibles modifiées à distance : {targets:?}");
             app.set_targets(targets.clone());
             Response::json(200, json!({ "targets": targets }).to_string())
         }
-        _ => Response::json(400, r#"{"error":"tableau JSON de cibles \"hote:port\" attendu"}"#),
+        None => Response::json(400, r#"{"error":"adresses attendues, ex. 10.0.2.2:8000, 1.1.1.1:443"}"#),
+    }
+}
+
+/// "a:1, b:2" ou "a:1 b:2" ou ["a:1", "b:2"] ; None si vide ou invalide.
+fn parse_targets(body: &str) -> Option<Vec<String>> {
+    let targets: Vec<String> = match serde_json::from_str::<Vec<String>>(body) {
+        Ok(list) => list,
+        Err(_) => body.split([',', ' ', '\n']).filter(|s| !s.is_empty()).map(String::from).collect(),
+    };
+    let valid = !targets.is_empty() && targets.iter().all(|t| valid_target(t));
+    valid.then_some(targets)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_targets;
+
+    #[test]
+    fn accepts_simple_and_json_formats() {
+        assert_eq!(parse_targets("10.0.2.2:8000").unwrap(), ["10.0.2.2:8000"]);
+        assert_eq!(parse_targets("a:1, b:2").unwrap(), ["a:1", "b:2"]);
+        assert_eq!(parse_targets(" a:1  b:2 ").unwrap(), ["a:1", "b:2"]);
+        assert_eq!(parse_targets(r#"["a:1","b:2"]"#).unwrap(), ["a:1", "b:2"]);
+    }
+
+    #[test]
+    fn rejects_invalid_targets() {
+        assert!(parse_targets("").is_none());
+        assert!(parse_targets("10.0.2.2").is_none());
+        assert!(parse_targets("a:1, pas-de-port").is_none());
+        assert!(parse_targets("[]").is_none());
     }
 }

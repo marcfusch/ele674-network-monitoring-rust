@@ -11,9 +11,9 @@
 </p>
 
 <h3>Cibles surveillées</h3>
-<p>Remplace la liste des adresses testées (format <code>"adresse:port"</code>) :</p>
+<p>Adresses à tester, séparées par des virgules (ex. <code>10.0.2.2:8000, 1.1.1.1:443</code>) :</p>
 <p>
-  <input id="targets" size="60" placeholder='["10.0.2.2:8000", "1.1.1.1:443"]'>
+  <input id="targets" size="60" placeholder="10.0.2.2:8000">
   <button onclick="post('/api/targets', byId('targets').value, 'targets-message')">Modifier les cibles surveillées</button>
   <span id="targets-message"></span>
 </p>
