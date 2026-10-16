@@ -92,9 +92,20 @@ async function refresh() {
     ` — uptime : ${d.uptime_s} s — rapports écrits : ${d.reports_written}`;
 
   const names = (await getJson('/api/reports')).slice(-5).reverse();
-  byId('reports').innerHTML = names
-    .map(n => `<li><a href="#" onclick="showReport('${n}')">${n}</a></li>`)
-    .join('');
+  byId('reports').replaceChildren(...names.map(reportItem));
+}
+
+function reportItem(name) {
+  const link = document.createElement('a');
+  link.href = '#';
+  link.textContent = name;
+  link.onclick = event => {
+    event.preventDefault();  // sinon "#" remonte en haut de la page
+    showReport(name);
+  };
+  const item = document.createElement('li');
+  item.append(link);
+  return item;
 }
 
 refresh();

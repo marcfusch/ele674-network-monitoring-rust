@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Config {
     pub ping_interval: u64, // s
     pub ping_timeout: u64,  // ms

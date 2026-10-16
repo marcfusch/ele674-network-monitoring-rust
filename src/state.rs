@@ -25,8 +25,8 @@ pub struct MonitorState {
 
 pub struct App {
     // RwLock : lectures fréquentes (web), écritures rares (mesures)
-    pub state: RwLock<MonitorState>,
-    pub targets: RwLock<Vec<String>>,
+    state: RwLock<MonitorState>,
+    targets: RwLock<Vec<String>>,
     pub control: Control,
     pub started: Instant,
     pub reports_written: AtomicU64,
@@ -55,11 +55,6 @@ impl App {
         self.targets.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    pub fn set_targets(&self, targets: Vec<String>) {
-        self.write().pings.retain(|t, _| targets.contains(t));
-        *self.targets.write().unwrap_or_else(|e| e.into_inner()) = targets;
-    }
-
     /// Ajoute en tête de liste ; false si la cible est déjà surveillée.
     pub fn add_target(&self, target: &str) -> bool {
         let mut targets = self.targets.write().unwrap_or_else(|e| e.into_inner());
@@ -72,7 +67,7 @@ impl App {
 
     /// Retire la cible et son historique ; false si elle n'existait pas.
     pub fn remove_target(&self, target: &str) -> bool {
-        // Un seul verrou à la fois : pas d'interblocage avec set_targets
+        // Un seul verrou à la fois : pas de risque d'interblocage
         let removed = {
             let mut targets = self.targets.write().unwrap_or_else(|e| e.into_inner());
             let before = targets.len();
@@ -177,13 +172,4 @@ mod tests {
         assert!(!app.read().pings.contains_key("a:1"));
     }
 
-    #[test]
-    fn removed_targets_are_forgotten() {
-        let app = App::new(vec!["a:1".into(), "b:2".into()]);
-        app.write().record_ping("a:1", Some(1.0));
-        app.write().record_ping("b:2", Some(1.0));
-        app.set_targets(vec!["b:2".into()]);
-        assert_eq!(app.targets(), ["b:2"]);
-        assert!(!app.read().pings.contains_key("a:1"));
-    }
 }

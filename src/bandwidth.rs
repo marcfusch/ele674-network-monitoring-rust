@@ -35,12 +35,23 @@ pub fn measure(url: &str, timeout: Duration) -> Result<f64, String> {
     let request = format!("GET {path} HTTP/1.0\r\nHost: {host}\r\n\r\n");
     stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
 
-    let mut data = Vec::new();
-    stream.read_to_end(&mut data).map_err(|e| format!("lecture : {e}"))?;
-    if !data.starts_with(b"HTTP/1.") || data.get(9..12) != Some(b"200") {
+    // Compte les octets au fil de l'eau : le fichier n'est jamais gardé en mémoire
+    let mut buf = [0u8; 16 * 1024];
+    let mut total = read(&mut stream, &mut buf)?;
+    if !buf.starts_with(b"HTTP/1.") || buf.get(9..12) != Some(b"200") {
         return Err("réponse HTTP inattendue".into());
     }
-    Ok(data.len() as f64 * 8.0 / start.elapsed().as_secs_f64().max(1e-6) / 1e6)
+    loop {
+        match read(&mut stream, &mut buf)? {
+            0 => break,
+            n => total += n,
+        }
+    }
+    Ok(total as f64 * 8.0 / start.elapsed().as_secs_f64().max(1e-6) / 1e6)
+}
+
+fn read(stream: &mut TcpStream, buf: &mut [u8]) -> Result<usize, String> {
+    stream.read(buf).map_err(|e| format!("lecture : {e}"))
 }
 
 /// "http://hote:port/chemin" -> ("hote:port", "/chemin")
